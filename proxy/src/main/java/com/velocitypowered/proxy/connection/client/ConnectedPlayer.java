@@ -74,6 +74,7 @@ import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import java.net.InetSocketAddress;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -736,9 +737,16 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player {
       if (connOrder.isEmpty()) {
         return Optional.empty();
       } else {
-        serversToTry = connOrder;
+        serversToTry = new ArrayList<>(connOrder);
       }
     }
+
+    serversToTry.sort((a, b) -> {
+      var as = server.getServer(a).get();
+      var bs = server.getServer(b).get();
+      var diff = as.getPlayersConnected().size() - bs.getPlayersConnected().size();
+      return diff;
+    });
 
     for (int i = tryIndex; i < serversToTry.size(); i++) {
       String toTryName = serversToTry.get(i);
