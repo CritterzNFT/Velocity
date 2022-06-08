@@ -38,7 +38,6 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.security.SecureRandom;
 import java.util.HashMap;
@@ -73,8 +72,10 @@ public class VelocityConfiguration implements ProxyConfig {
   @Expose private final Advanced advanced;
   @Expose private final Query query;
   private final Metrics metrics;
+  @Expose private boolean enablePlayerAddressLogging = true;
   private net.kyori.adventure.text.@MonotonicNonNull Component motdAsComponent;
   private @Nullable Favicon favicon;
+  @Expose private boolean forceKeyAuthentication = true; // Added in 1.19
 
   private VelocityConfiguration(Servers servers, ForcedHosts forcedHosts, Advanced advanced,
       Query query, Metrics metrics) {
@@ -88,8 +89,9 @@ public class VelocityConfiguration implements ProxyConfig {
   private VelocityConfiguration(String bind, String motd, int showMaxPlayers, boolean onlineMode,
       boolean preventClientProxyConnections, boolean announceForge,
       PlayerInfoForwarding playerInfoForwardingMode, byte[] forwardingSecret,
-      boolean onlineModeKickExistingPlayers, PingPassthroughMode pingPassthrough, Servers servers,
-      ForcedHosts forcedHosts, Advanced advanced, Query query, Metrics metrics) {
+      boolean onlineModeKickExistingPlayers, PingPassthroughMode pingPassthrough,
+      boolean enablePlayerAddressLogging, Servers servers,ForcedHosts forcedHosts,
+      Advanced advanced, Query query, Metrics metrics, boolean forceKeyAuthentication) {
     this.bind = bind;
     this.motd = motd;
     this.showMaxPlayers = showMaxPlayers;
@@ -100,11 +102,13 @@ public class VelocityConfiguration implements ProxyConfig {
     this.forwardingSecret = forwardingSecret;
     this.onlineModeKickExistingPlayers = onlineModeKickExistingPlayers;
     this.pingPassthrough = pingPassthrough;
+    this.enablePlayerAddressLogging = enablePlayerAddressLogging;
     this.servers = servers;
     this.forcedHosts = forcedHosts;
     this.advanced = advanced;
     this.query = query;
     this.metrics = metrics;
+    this.forceKeyAuthentication = forceKeyAuthentication;
   }
 
   /**
@@ -216,7 +220,7 @@ public class VelocityConfiguration implements ProxyConfig {
   }
 
   private void loadFavicon() {
-    Path faviconPath = Paths.get("server-icon.png");
+    Path faviconPath = Path.of("server-icon.png");
     if (Files.exists(faviconPath)) {
       try {
         this.favicon = Favicon.create(faviconPath);
@@ -351,6 +355,10 @@ public class VelocityConfiguration implements ProxyConfig {
     return pingPassthrough;
   }
 
+  public boolean isPlayerAddressLoggingEnabled() {
+    return enablePlayerAddressLogging;
+  }
+
   public boolean isBungeePluginChannelEnabled() {
     return advanced.isBungeePluginMessageChannel();
   }
@@ -371,6 +379,14 @@ public class VelocityConfiguration implements ProxyConfig {
     return advanced.isLogCommandExecutions();
   }
 
+  public boolean isLogPlayerConnections() {
+    return advanced.isLogPlayerConnections();
+  }
+
+  public boolean isForceKeyAuthentication() {
+    return forceKeyAuthentication;
+  }
+
   @Override
   public String toString() {
     return MoreObjects.toStringHelper(this)
@@ -386,6 +402,8 @@ public class VelocityConfiguration implements ProxyConfig {
         .add("advanced", advanced)
         .add("query", query)
         .add("favicon", favicon)
+        .add("enablePlayerAddressLogging", enablePlayerAddressLogging)
+        .add("forceKeyAuthentication", forceKeyAuthentication)
         .toString();
   }
 
@@ -455,10 +473,12 @@ public class VelocityConfiguration implements ProxyConfig {
     String motd = config.getOrElse("motd", "&#09add3A Velocity Server");
     int maxPlayers = config.getIntOrElse("show-max-players", 500);
     Boolean onlineMode = config.getOrElse("online-mode", true);
+    Boolean forceKeyAuthentication = config.getOrElse("force-key-authentication", true);
     Boolean announceForge = config.getOrElse("announce-forge", true);
     Boolean preventClientProxyConnections = config.getOrElse("prevent-client-proxy-connections",
         true);
     Boolean kickExisting = config.getOrElse("kick-existing-players", false);
+    Boolean enablePlayerAddressLogging = config.getOrElse("enable-player-address-logging", true);
 
     return new VelocityConfiguration(
         bind,
@@ -471,11 +491,13 @@ public class VelocityConfiguration implements ProxyConfig {
         forwardingSecret,
         kickExisting,
         pingPassthroughMode,
+        enablePlayerAddressLogging,
         new Servers(serversConfig),
         new ForcedHosts(forcedHostsConfig),
         new Advanced(advancedConfig),
         new Query(queryConfig),
-        new Metrics(metricsConfig)
+        new Metrics(metricsConfig),
+        forceKeyAuthentication
     );
   }
 
@@ -630,6 +652,7 @@ public class VelocityConfiguration implements ProxyConfig {
     @Expose private boolean failoverOnUnexpectedServerDisconnect = true;
     @Expose private boolean announceProxyCommands = true;
     @Expose private boolean logCommandExecutions = false;
+    @Expose private boolean logPlayerConnections = true;
 
     private Advanced() {
     }
@@ -653,6 +676,7 @@ public class VelocityConfiguration implements ProxyConfig {
             .getOrElse("failover-on-unexpected-server-disconnect", true);
         this.announceProxyCommands = config.getOrElse("announce-proxy-commands", true);
         this.logCommandExecutions = config.getOrElse("log-command-executions", false);
+        this.logPlayerConnections = config.getOrElse("log-player-connections", true);
       }
     }
 
@@ -704,6 +728,10 @@ public class VelocityConfiguration implements ProxyConfig {
       return logCommandExecutions;
     }
 
+    public boolean isLogPlayerConnections() {
+      return logPlayerConnections;
+    }
+
     @Override
     public String toString() {
       return "Advanced{"
@@ -719,6 +747,7 @@ public class VelocityConfiguration implements ProxyConfig {
           + ", failoverOnUnexpectedServerDisconnect=" + failoverOnUnexpectedServerDisconnect
           + ", announceProxyCommands=" + announceProxyCommands
           + ", logCommandExecutions=" + logCommandExecutions
+          + ", logPlayerConnections=" + logPlayerConnections
           + '}';
     }
   }
