@@ -28,18 +28,22 @@ import com.velocitypowered.proxy.util.except.QuietDecoderException;
 import io.netty.buffer.ByteBuf;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
+import java.util.UUID;
+
 public class ServerLogin implements MinecraftPacket {
 
   private static final QuietDecoderException EMPTY_USERNAME = new QuietDecoderException("Empty username!");
 
   private @Nullable String username;
   private @Nullable IdentifiedKey playerKey; // Introduced in 1.19
+  private @Nullable UUID holderUuid; // Used for key revision 2
 
   public ServerLogin() {
   }
 
   public ServerLogin(String username, @Nullable IdentifiedKey playerKey) {
     this.username = Preconditions.checkNotNull(username, "username");
+    this.playerKey = playerKey;
   }
 
   public String getUsername() {
@@ -55,6 +59,10 @@ public class ServerLogin implements MinecraftPacket {
 
   public void setPlayerKey(IdentifiedKey playerKey) {
     this.playerKey = playerKey;
+  }
+
+  public UUID getHolderUuid() {
+    return holderUuid;
   }
 
   @Override
@@ -74,7 +82,13 @@ public class ServerLogin implements MinecraftPacket {
 
     if (version.compareTo(ProtocolVersion.MINECRAFT_1_19) >= 0) {
       if (buf.readBoolean()) {
-        playerKey = ProtocolUtils.readPlayerKey(buf);
+        playerKey = ProtocolUtils.readPlayerKey(version, buf);
+      }
+
+      if (version.compareTo(ProtocolVersion.MINECRAFT_1_19_1) >= 0) {
+        if (buf.readBoolean()) {
+          holderUuid = ProtocolUtils.readUuid(buf);
+        }
       }
     }
   }
@@ -93,6 +107,15 @@ public class ServerLogin implements MinecraftPacket {
       } else {
         buf.writeBoolean(false);
       }
+
+      if (version.compareTo(ProtocolVersion.MINECRAFT_1_19_1) >= 0) {
+        if (playerKey != null && playerKey.getSignatureHolder() != null) {
+          buf.writeBoolean(true);
+          ProtocolUtils.writeUuid(buf, playerKey.getSignatureHolder());
+        } else {
+          buf.writeBoolean(false);
+        }
+      }
     }
   }
 
@@ -101,9 +124,20 @@ public class ServerLogin implements MinecraftPacket {
     // Accommodate the rare (but likely malicious) use of UTF-8 usernames, since it is technically
     // legal on the protocol level.
     int base = 1 + (16 * 4);
+    // Adjustments for Key-authentication
     if (version.compareTo(ProtocolVersion.MINECRAFT_1_19) >= 0) {
-      return -1;
-      //TODO: ## 19
+      // + 1 for the boolean present/ not present
+      // + 8 for the long expiry
+      // + 2 len for varint key size
+      // + 294 for the key
+      // + 2 len for varint signature size
+      // + 512 for signature
+      base += 1 + 8 + 2 + 294 + 2 + 512;
+      if (version.compareTo(ProtocolVersion.MINECRAFT_1_19_1) >= 0) {
+        // +1 boolean uuid optional
+        // + 2 * 8 for the long msb/lsb
+        base += 1 + 8 + 8;
+      }
     }
     return base;
   }

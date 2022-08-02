@@ -28,7 +28,6 @@ import com.google.gson.annotations.Expose;
 import com.velocitypowered.api.proxy.config.ProxyConfig;
 import com.velocitypowered.api.util.Favicon;
 import com.velocitypowered.proxy.util.AddressUtil;
-
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.io.File;
 import java.io.IOException;
@@ -90,7 +89,7 @@ public class VelocityConfiguration implements ProxyConfig {
       boolean preventClientProxyConnections, boolean announceForge,
       PlayerInfoForwarding playerInfoForwardingMode, byte[] forwardingSecret,
       boolean onlineModeKickExistingPlayers, PingPassthroughMode pingPassthrough,
-      boolean enablePlayerAddressLogging, Servers servers,ForcedHosts forcedHosts,
+      boolean enablePlayerAddressLogging, Servers servers, ForcedHosts forcedHosts,
       Advanced advanced, Query query, Metrics metrics, boolean forceKeyAuthentication) {
     this.bind = bind;
     this.motd = motd;
@@ -422,6 +421,12 @@ public class VelocityConfiguration implements ProxyConfig {
       throw new RuntimeException("Default configuration file does not exist.");
     }
 
+    // Create the forwarding-secret file on first-time startup if it doesn't exist
+    Path defaultForwardingSecretPath = Path.of("forwarding.secret");
+    if (Files.notExists(path) && Files.notExists(defaultForwardingSecretPath)) {
+      Files.writeString(defaultForwardingSecretPath, generateRandomString(12));
+    }
+
     boolean mustResave = false;
     CommentedFileConfig config = CommentedFileConfig.builder(path)
         .defaultData(defaultConfigLocation)
@@ -442,16 +447,68 @@ public class VelocityConfiguration implements ProxyConfig {
     CommentedFileConfig defaultConfig = CommentedFileConfig.of(tmpFile, TomlFormat.instance());
     defaultConfig.load();
 
-    // Retrieve the forwarding secret. First, from environment variable, then from config.
+    // TODO: migrate this on Velocity Polymer
+    double configVersion;
+    try {
+      configVersion = Double.parseDouble(config.getOrElse("config-version", "1.0"));
+    } catch (NumberFormatException e) {
+      configVersion = 1.0;
+    }
+
+    // Whether or not this config version is older than 2.0 which uses the deprecated "forwarding-secret" parameter
+    boolean legacyConfig = configVersion < 2.0;
+
+    String forwardingSecretString;
     byte[] forwardingSecret;
-    String forwardingSecretString = System.getenv()
-        .getOrDefault("VELOCITY_FORWARDING_SECRET", config.get("forwarding-secret"));
-    if (forwardingSecretString == null || forwardingSecretString.isEmpty()) {
-      forwardingSecretString = generateRandomString(12);
-      config.set("forwarding-secret", forwardingSecretString);
-      mustResave = true;
+
+    // Handle the previous (version 1.0) config
+    // There is duplicate/old code here in effort to make the future commit which abandons legacy config handling
+    // easier to implement. All that would be required is removing the if statement here and keeping the contents
+    // of the else block (with slight tidying).
+    if (legacyConfig) {
+      logger.warn("You are currently using a deprecated configuration version. The \"forwarding-secret\""
+          + " parameter has been recognized as a security concern and has been removed in config version 2.0."
+          + " It's recommended you rename your current \"velocity.toml\" to something else to allow Velocity"
+          + " to generate a config file of the new version. You may then configure that file as you normally would."
+          + " The only differences are the config-version and \"forwarding-secret\" has been replaced"
+          + " by \"forwarding-secret-file\".");
+
+      // Default legacy handling
+      forwardingSecretString = System.getenv()
+          .getOrDefault("VELOCITY_FORWARDING_SECRET", config.get("forwarding-secret"));
+      if (forwardingSecretString == null || forwardingSecretString.isEmpty()) {
+        forwardingSecretString = generateRandomString(12);
+        config.set("forwarding-secret", forwardingSecretString);
+        mustResave = true;
+      }
+    } else {
+      // New handling
+      forwardingSecretString = System.getenv().getOrDefault("VELOCITY_FORWARDING_SECRET", "");
+      if (forwardingSecretString.isEmpty()) {
+        String forwardSecretFile = config.get("forwarding-secret-file");
+        Path secretPath = forwardSecretFile == null
+            ? defaultForwardingSecretPath
+            : Path.of(forwardSecretFile);
+        if (Files.exists(secretPath)) {
+          if (Files.isRegularFile(secretPath)) {
+            forwardingSecretString = String.join("", Files.readAllLines(secretPath));
+          } else {
+            throw new RuntimeException("The file " + forwardSecretFile + " is not a valid file or it is a directory.");
+          }
+        } else {
+          throw new RuntimeException("The forwarding-secret-file does not exists.");
+        }
+      }
     }
     forwardingSecret = forwardingSecretString.getBytes(StandardCharsets.UTF_8);
+
+    if (configVersion == 1.0 || configVersion == 2.0) {
+      config.set("force-key-authentication", config.getOrElse("force-key-authentication", true));
+      config.setComment("force-key-authentication",
+              "Should the proxy enforce the new public key security standard? By default, this is on.");
+      config.set("config-version", configVersion == 2.0 ? "2.5" : "1.5");
+      mustResave = true;
+    }
 
     // Handle any cases where the config needs to be saved again
     if (mustResave) {
@@ -479,6 +536,14 @@ public class VelocityConfiguration implements ProxyConfig {
         true);
     Boolean kickExisting = config.getOrElse("kick-existing-players", false);
     Boolean enablePlayerAddressLogging = config.getOrElse("enable-player-address-logging", true);
+
+    // Throw an exception if the forwarding-secret file is empty and the proxy is using a 
+    // forwarding mode that requires it.
+    if (forwardingSecret.length == 0
+        && (forwardingMode == PlayerInfoForwarding.MODERN
+        || forwardingMode == PlayerInfoForwarding.BUNGEEGUARD)) {
+      throw new RuntimeException("The forwarding-secret file must not be empty.");
+    }
 
     return new VelocityConfiguration(
         bind,
